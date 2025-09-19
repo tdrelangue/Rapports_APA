@@ -1,166 +1,249 @@
-import asyncio
 import os
-from typing import List, Tuple
-from email.message import EmailMessage
+import asyncio
 import smtplib
-from datetime import date, datetime
+import imaplib
+import zipfile
+import tempfile
 import shutil
+import time
+from typing import List, Optional, Tuple
+from email.message import EmailMessage
+from email.utils import make_msgid, formatdate
+from datetime import datetime
 from dotenv import load_dotenv
 
-class EmailSendError(Exception):
-    pass
+# ---------- Configuration ----------
+B64_OVERHEAD = 1.37
+DEFAULT_MAX_MB = float(os.getenv("SMTP_MAX_MB", "19"))   # info log uniquement
+CONCURRENCY = int(os.getenv("SMTP_CONCURRENCY", "3"))
+REQUEST_DSN = os.getenv("SMTP_REQUEST_DSN", "1") == "1"
+COPY_TO_SENT = os.getenv("IMAP_COPY_SENT", "0") == "1"
+IMAP_SENT_FOLDER = os.getenv("IMAP_SENT_FOLDER", '"Sent"')
+PROTEGES_DIR = os.getenv("PROTEGES_DIR", "Protégés")
+LOG_DIR = os.getenv("LOG_DIR", "logs")
 
-def get_smtp_config(email):
-    domain = email.split('@')[-1].lower()
-    extension = domain.split('.')[-1].lower()
-    if "gmail.com" in domain:
-        return ("smtp.gmail.com", 587, "starttls")
-    elif "yahoo.com" in domain:
-        return ("smtp.mail.yahoo.com", 587, "starttls")
-    elif "outlook.com" in domain or "hotmail.com" in domain or "live.com" in domain:
-        return ("smtp.office365.com", 587, "starttls")
-    elif "ovh" in extension or "ovh.net" in domain:
-        return ("ssl0.ovh.net", 465, "ssl")
-    else:
-        return ("smtp." + domain, 587, "starttls")
-
-def init_log_session():
-    now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_dir = os.path.join("logs", now)
+# ---------- Utilitaires ----------
+def log_message(log_dir: str, txt: str) -> None:
     os.makedirs(log_dir, exist_ok=True)
-    return log_dir
+    path = os.path.join(log_dir, "log.txt")
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(f"[{ts}] {txt}\n")
+    print(txt)
 
-def log_message(log_dir, message):
-    log_path = os.path.join(log_dir, "log.txt")
-    with open(log_path, "a", encoding="utf-8") as f:
-        f.write(message + "\n")
+def attachments_size_mb(paths: List[str]) -> float:
+    return sum(os.path.getsize(p) for p in paths if os.path.isfile(p)) / (1024 * 1024)
 
-def log_successful_protege(log_dir, protege_name, attachments):
-    protege_log_dir = os.path.join(log_dir, protege_name)
-    os.makedirs(protege_log_dir, exist_ok=True)
-    for filepath in attachments:
-        filename = os.path.basename(filepath)
-        new_path = os.path.join(protege_log_dir, filename)
-        shutil.move(filepath, new_path)
+def zip_attachments(label: str, attachments: List[str]) -> Tuple[List[str], str]:
+    tmpdir = tempfile.mkdtemp(prefix=f"apa_{label}_")
+    zip_path = os.path.join(tmpdir, f"{label}.zip")
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for p in attachments:
+            zf.write(p, arcname=os.path.basename(p))
+    return [zip_path], tmpdir
 
-async def async_send_email(sender_email: str, sender_password: str, receiver_email: str,
-                           subject: str, body: str, attachments: List[str]) -> Tuple[bool, str]:
+def get_smtp_config(sender_email: str) -> Tuple[str, int, bool, Optional[str]]:
+    env_host = os.getenv("SMTP_HOST")
+    env_port = os.getenv("SMTP_PORT")
+    env_ssl = os.getenv("SMTP_SSL")
+    env_imap = os.getenv("IMAP_HOST")
+    if env_host and env_port:
+        return env_host, int(env_port), (env_ssl or "1") == "1", env_imap
+
+    domain = sender_email.split("@")[-1].lower()
+    if domain == "gmail.com":
+        return "smtp.gmail.com", 465, True, env_imap or "imap.gmail.com"
+    if any(k in domain for k in ("outlook", "hotmail", "live", "office365")):
+        return "smtp.office365.com", 587, False, env_imap or "outlook.office365.com"
+    if "yahoo" in domain:
+        return "smtp.mail.yahoo.com", 465, True, env_imap or "imap.mail.yahoo.com"
+    return f"smtp.{domain}", 465, True, env_imap or f"imap.{domain}"
+
+def build_message(
+    sender: str,
+    recipient: str,
+    subject: str,
+    body: str,
+    attachments: List[str],
+) -> EmailMessage:
     msg = EmailMessage()
-    msg['Subject'] = subject
-    msg['From'] = sender_email
-    msg['To'] = receiver_email
+    msg["From"] = sender
+    msg["To"] = recipient
+    msg["Date"] = formatdate(localtime=True)
+    msg["Subject"] = subject
+    msg["Message-ID"] = make_msgid(domain=sender.split("@")[-1])
     msg.set_content(body)
+    for p in attachments:
+        with open(p, "rb") as f:
+            data = f.read()
+        filename = os.path.basename(p)
+        msg.add_attachment(
+            data,
+            maintype="application",
+            subtype="octet-stream",
+            filename=filename,
+        )
+    return msg
 
-    for attachment in attachments:
-        if os.path.isfile(attachment):
-            with open(attachment, 'rb') as f:
-                msg.add_attachment(f.read(), maintype='application', subtype='octet-stream',
-                                   filename=os.path.basename(attachment))
+def smtp_send_message(
+    msg, smtp_host, smtp_port, use_ssl, user, pwd, request_dsn: bool
+) -> None:
+    mail_opts = []  # ex: ["RET=HDRS"] si tu veux
+    if use_ssl:
+        with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=60) as s:
+            s.ehlo()
+            s.login(user, pwd)
+            # DSN seulement si annoncé
+            support_dsn = "dsn" in (s.esmtp_features or {})
+            rcpt_opts = ["NOTIFY=SUCCESS,FAILURE,DELAY"] if (request_dsn and support_dsn) else []
+            s.send_message(msg, mail_options=mail_opts, rcpt_options=rcpt_opts)
+    else:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=60) as s:
+            s.ehlo()
+            s.starttls()
+            s.ehlo()  # renégociation des features
+            s.login(user, pwd)
+            support_dsn = "dsn" in (s.esmtp_features or {})
+            rcpt_opts = ["NOTIFY=SUCCESS,FAILURE,DELAY"] if (request_dsn and support_dsn) else []
+            s.send_message(msg, mail_options=mail_opts, rcpt_options=rcpt_opts)
 
-    smtp_server, port, method = get_smtp_config(sender_email)
 
+def imap_append_sent(imap_host: str, user: str, pwd: str, raw_msg: bytes) -> Optional[str]:
     try:
-        def send():
-            if method == "ssl":
-                with smtplib.SMTP_SSL(smtp_server, port) as smtp:
-                    smtp.login(sender_email, sender_password)
-                    smtp.send_message(msg)
-            elif method == "starttls":
-                with smtplib.SMTP(smtp_server, port) as smtp:
-                    smtp.ehlo()
-                    smtp.starttls()
-                    smtp.login(sender_email, sender_password)
-                    smtp.send_message(msg)
-            else:
-                raise EmailSendError("Unsupported SMTP method")
+        imap = imaplib.IMAP4_SSL(imap_host)
+        imap.login(user, pwd)
 
-        await asyncio.to_thread(send)
-        return True, ""
+        date_str = imaplib.Time2Internaldate(time.time())
+        typ, _ = imap.append(IMAP_SENT_FOLDER,  '', date_str, raw_msg)
+        imap.logout()
+        if typ != "OK":
+            return f"IMAP APPEND non OK: {typ}"
+        return None
     except Exception as e:
-        return False, str(e)
+        return str(e)
 
-async def effectuer_rapport_APA_async_limited(status_callback=lambda msg: None):
-    def trouver_trimestre_actuel(aujourdhui=None):
-        if aujourdhui is None:
-            aujourdhui = date.today()
-        mois = aujourdhui.month
-        annee = aujourdhui.year
-        if 1 <= mois <= 3:
-            return (4, annee - 1)
-        elif 4 <= mois <= 6:
-            return (1, annee)
-        elif 7 <= mois <= 9:
-            return (2, annee)
-        else:
-            return (3, annee)
+def _collect_env() -> Tuple[str, str, str]:
+    load_dotenv()
+    sender = os.getenv("email", "")
+    pwd = os.getenv("email_pwd", "")
+    recipient = os.getenv("emailrec", "")
+    return sender, pwd, recipient
 
-    def lister_proteges():
-        chemin_proteges = "Protégés"
+def _list_proteges(root: str) -> List[str]:
+    try:
+        return [os.path.join(root, n) for n in os.listdir(root) if os.path.isdir(os.path.join(root, n))]
+    except FileNotFoundError:
+        return []
+
+def _list_files(dir_path: str) -> List[str]:
+    return [os.path.join(dir_path, n) for n in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, n))]
+
+# ---------- Envoi avec fallback zip ----------
+async def _send_one(
+    sem: asyncio.Semaphore,
+    protege_name: str,
+    recipient: str,
+    subject: str,
+    body: str,
+    files: List[str],
+    sender: str,
+    pwd: str,
+    log_dir: str,
+) -> bool:
+    async with sem:
+        smtp_host, smtp_port, use_ssl, imap_host = get_smtp_config(sender)
+
+        # Tentative 1: en l'état
         try:
-            return [os.path.join(chemin_proteges, nom) for nom in os.listdir(chemin_proteges)
-                    if os.path.isdir(os.path.join(chemin_proteges, nom))]
-        except FileNotFoundError:
-            status_callback("Le dossier 'Protégés' n'existe pas.")
-            return []
+            est_total_mb = attachments_size_mb(files) * B64_OVERHEAD
+            msg = build_message(sender, recipient, subject, body, files)
+            mid = msg["Message-ID"]
+            smtp_send_message(msg, smtp_host, smtp_port, use_ssl, sender, pwd, REQUEST_DSN)
+            log_message(log_dir, f"OK(as-is) {protege_name} MID={mid} SMTP={smtp_host}:{smtp_port} size≈{est_total_mb:.2f}MB")
 
-    def CollectEmailCreds():
-        load_dotenv()
-        return os.getenv('email', ''), os.getenv('email_pwd', '')
+            if COPY_TO_SENT and imap_host:
+                err = imap_append_sent(imap_host, sender, pwd, msg.as_bytes())
+                if err:
+                    log_message(log_dir, f"IMAP APPEND échec {protege_name} MID={mid}: {err}")
+                else:
+                    log_message(log_dir, f"IMAP APPEND OK {protege_name} MID={mid}")
+            return True
 
-    def CollectReceiverEmail():
-        load_dotenv()
-        return os.getenv('emailrec', '')
+        except smtplib.SMTPResponseException as e:
+            code = getattr(e, "smtp_code", None)
+            err = getattr(e, "smtp_error", b"").decode(errors="ignore")
+            log_message(log_dir, f"First attempt FAIL {protege_name} code={code} err={err}")
 
-    def CollectWorkerInfo():
-        load_dotenv()
-        return os.getenv('NameSender', ''), os.getenv('Role', '')
+        except Exception as e:
+            log_message(log_dir, f"First attempt FAIL {protege_name} err={e}")
 
-    trimestre = trouver_trimestre_actuel()
-    counter = "er" if trimestre[0] == 1 else "eme"
-    body = f"Bonjour, \n \n Veuillez trouver ci-joint les justificatifs pour le {trimestre[0]}{counter} TR {trimestre[1]} dans le dossier de "
-    WorkerName, WorkerRole = CollectWorkerInfo()
-    signature = f"{WorkerName} \n{WorkerRole}"
-    log_dir = init_log_session()
+        # Tentative 2: fallback zip
+        tmpdir = None
+        try:
+            atts, tmpdir = zip_attachments(protege_name, files)
+            est_zip_mb = attachments_size_mb(atts) * B64_OVERHEAD
+            msg2 = build_message(sender, recipient, f"{subject} (ZIP)", body, atts)
+            mid2 = msg2["Message-ID"]
+            smtp_send_message(msg2, smtp_host, smtp_port, use_ssl, sender, pwd, REQUEST_DSN)
+            log_message(log_dir, f"OK(fallback-zip) {protege_name} MID={mid2} SMTP={smtp_host}:{smtp_port} size≈{est_zip_mb:.2f}MB")
 
-    sender_email, sender_password = CollectEmailCreds()
-    receiver_email = CollectReceiverEmail()
+            if COPY_TO_SENT and imap_host:
+                err2 = imap_append_sent(imap_host, sender, pwd, msg2.as_bytes())
+                if err2:
+                    log_message(log_dir, f"IMAP APPEND échec {protege_name} MID={mid2}: {err2}")
+                else:
+                    log_message(log_dir, f"IMAP APPEND OK {protege_name} MID={mid2}")
+            return True
 
-    proteges = lister_proteges()
-    semaphore = asyncio.Semaphore(1)
+        except Exception as e:
+            log_message(log_dir, f"Fallback zip FAIL {protege_name}: {e}")
+            return False
 
-    async def wrapped_send(protege_name, attachments, subject, full_body):
-        async with semaphore:
-            status_callback(f"Envoi en cours pour {protege_name}...")
-            success, error = await async_send_email(sender_email, sender_password, receiver_email,
-                                                    subject, full_body, attachments)
-            if success:
-                status_callback(f"Envoi réussi pour {protege_name}")
-                log_message(log_dir, f"Email sent successfully for {protege_name}")
-                log_successful_protege(log_dir, protege_name, attachments)
-                return True
-            else:
-                status_callback(f"Envoi échoué pour {protege_name} : {error}")
-                log_message(log_dir, f"Failed to send email for {protege_name}: {error}")
-                return False
+        finally:
+            if tmpdir:
+                shutil.rmtree(tmpdir, ignore_errors=True)
 
+# ---------- Orchestrateur ----------
+async def effectuer_rapport_APA_async_limited(status_callback=print) -> None:
+    sender, pwd, recipient = _collect_env()
+    if not (sender and pwd and recipient):
+        raise RuntimeError("Variables d'environnement manquantes: email, email_pwd, emailrec")
+
+    os.makedirs(LOG_DIR, exist_ok=True)
+    run_dir = os.path.join(LOG_DIR, datetime.now().strftime("run_%Y%m%d_%H%M%S"))
+    os.makedirs(run_dir, exist_ok=True)
+
+    status_callback("Préparation des envois…")
+    proteges = _list_proteges(PROTEGES_DIR)
+    if not proteges:
+        status_callback("Aucun dossier dans 'Protégés'.")
+        return
+
+    subject = os.getenv("MAIL_SUBJECT", "Rapport trimestriel APA")
+    body = os.getenv("MAIL_BODY", "Bonjour,\n\nVeuillez trouver ci-joint le rapport trimestriel APA.\n\nCordialement.")
+
+    sem = asyncio.Semaphore(CONCURRENCY)
     tasks = []
-    for protege in proteges:
-        protege_name = os.path.basename(protege)
-        full_body = body + f"{protege_name}.\n \n" + signature
-        subject = f"Justificatifs APA {protege_name} {trimestre[0]}{counter} TR {trimestre[1]}"
-        attachments = [os.path.join(protege, nom) for nom in os.listdir(protege)
-                       if os.path.isfile(os.path.join(protege, nom))]
-
-        if not attachments:
-            log_message(log_dir, f"No attachment found for {protege_name}, skipped.")
+    for p in proteges:
+        protege_name = os.path.basename(p)
+        files = _list_files(p)
+        if not files:
+            log_message(run_dir, f"No attachment found for {protege_name}, skipped.")
             continue
-
-        tasks.append(wrapped_send(protege_name, attachments, subject, full_body))
+        # Log d’info taille “théorique”
+        info_mb = attachments_size_mb(files) * B64_OVERHEAD
+        log_message(run_dir, f"{protege_name}: tentative as-is, taille SMTP≈{info_mb:.2f}MB (seuil info {DEFAULT_MAX_MB}MB)")
+        tasks.append(
+            _send_one(
+                sem, protege_name, recipient, subject, body, files, sender, pwd, run_dir
+            )
+        )
 
     results = await asyncio.gather(*tasks)
-    success_count = sum(results)
-    failure_count = len(results) - success_count
-    status_callback(f"\nEnvoi terminé: {success_count} succès, {failure_count} échecs.")
+    success = sum(1 for r in results if r)
+    fail = len(results) - success
+    status_callback(f"Envoi terminé: {success} succès, {fail} échecs.")
+    log_message(run_dir, f"Résumé: {success} succès, {fail} échecs.")
 
 if __name__ == "__main__":
     asyncio.run(effectuer_rapport_APA_async_limited())
