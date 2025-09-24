@@ -117,7 +117,7 @@ def smtp_send_message(msg, smtp_host, smtp_port, use_ssl, user, pwd, request_dsn
         with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=60) as s:
             s.ehlo(); s.login(user, pwd)
             feats = getattr(s, "esmtp_features", {}) or {}
-            rcpt_opts = ["NOTIFY=SUCCESS,FAILURE,DELAY"] if (request_dsn and "dsn" in feats) else None
+            rcpt_opts = ["NOTIFY=SUCCESS,FAILURE,DELAY"] if (request_dsn and "dsn" in feats) else []
             try:
                 s.send_message(msg, mail_options=mail_opts, rcpt_options=rcpt_opts)
             except smtplib.SMTPRecipientsRefused as e:
@@ -130,7 +130,7 @@ def smtp_send_message(msg, smtp_host, smtp_port, use_ssl, user, pwd, request_dsn
         with smtplib.SMTP(smtp_host, smtp_port, timeout=60) as s:
             s.ehlo(); s.starttls(); s.ehlo(); s.login(user, pwd)
             feats = getattr(s, "esmtp_features", {}) or {}
-            rcpt_opts = ["NOTIFY=SUCCESS,FAILURE,DELAY"] if (request_dsn and "dsn" in feats) else None
+            rcpt_opts = ["NOTIFY=SUCCESS,FAILURE,DELAY"] if (request_dsn and "dsn" in feats) else []
             try:
                 s.send_message(msg, mail_options=mail_opts, rcpt_options=rcpt_opts)
             except smtplib.SMTPRecipientsRefused as e:
