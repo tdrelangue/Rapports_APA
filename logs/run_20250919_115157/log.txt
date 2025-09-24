@@ -1,0 +1,16 @@
+[2025-09-19 11:51:57] Cheyrou Henriette: tentative as-is, taille SMTP≈2.14MB (seuil info 19.0MB)
+[2025-09-19 11:51:57] Colin  Leloup  Annie: tentative as-is, taille SMTP≈1.87MB (seuil info 19.0MB)
+[2025-09-19 11:51:57] Laporte Jeannette: tentative as-is, taille SMTP≈0.55MB (seuil info 19.0MB)
+[2025-09-19 11:51:57] TEST test: tentative as-is, taille SMTP≈1.05MB (seuil info 19.0MB)
+[2025-09-19 11:51:57] TEST2 test2: tentative as-is, taille SMTP≈1.82MB (seuil info 19.0MB)
+[2025-09-19 11:51:57] First attempt FAIL Cheyrou Henriette err=build_message() missing 1 required positional argument: 'attachments'
+[2025-09-19 11:51:57] Fallback zip FAIL Cheyrou Henriette: build_message() missing 1 required positional argument: 'attachments'
+[2025-09-19 11:51:57] First attempt FAIL Colin  Leloup  Annie err=build_message() missing 1 required positional argument: 'attachments'
+[2025-09-19 11:51:57] Fallback zip FAIL Colin  Leloup  Annie: build_message() missing 1 required positional argument: 'attachments'
+[2025-09-19 11:51:57] First attempt FAIL Laporte Jeannette err=build_message() missing 1 required positional argument: 'attachments'
+[2025-09-19 11:51:57] Fallback zip FAIL Laporte Jeannette: build_message() missing 1 required positional argument: 'attachments'
+[2025-09-19 11:51:57] First attempt FAIL TEST test err=build_message() missing 1 required positional argument: 'attachments'
+[2025-09-19 11:51:57] Fallback zip FAIL TEST test: build_message() missing 1 required positional argument: 'attachments'
+[2025-09-19 11:51:57] First attempt FAIL TEST2 test2 err=build_message() missing 1 required positional argument: 'attachments'
+[2025-09-19 11:51:57] Fallback zip FAIL TEST2 test2: build_message() missing 1 required positional argument: 'attachments'
+[2025-09-19 11:51:57] Résumé: 0 succès, 5 échecs.

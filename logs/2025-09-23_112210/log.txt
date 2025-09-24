@@ -1,0 +1,11 @@
+[2025-09-23 11:22:10] Cheyrou Henriette: tentative as-is, taille SMTP≈2.14MB (seuil info 19.0MB)
+[2025-09-23 11:22:13] OK(as-is) Cheyrou Henriette MID=<175861933054.17100.13692792911301571025@orange.fr> SMTP=smtp.orange.fr:465 size≈2.14MB
+[2025-09-23 11:22:13] Colin  Leloup  Annie: tentative as-is, taille SMTP≈1.87MB (seuil info 19.0MB)
+[2025-09-23 11:22:16] OK(as-is) Colin  Leloup  Annie MID=<175861933374.17100.14464447583110032268@orange.fr> SMTP=smtp.orange.fr:465 size≈1.87MB
+[2025-09-23 11:22:16] Laporte Jeannette: tentative as-is, taille SMTP≈0.55MB (seuil info 19.0MB)
+[2025-09-23 11:22:18] OK(as-is) Laporte Jeannette MID=<175861933690.17100.9901864211539608878@orange.fr> SMTP=smtp.orange.fr:465 size≈0.55MB
+[2025-09-23 11:22:18] TEST test: tentative as-is, taille SMTP≈1.05MB (seuil info 19.0MB)
+[2025-09-23 11:22:21] OK(as-is) TEST test MID=<175861933895.17100.246196376200419816@orange.fr> SMTP=smtp.orange.fr:465 size≈1.05MB
+[2025-09-23 11:22:21] TEST2 test2: tentative as-is, taille SMTP≈1.82MB (seuil info 19.0MB)
+[2025-09-23 11:22:24] OK(as-is) TEST2 test2 MID=<175861934180.17100.13762774039216142772@orange.fr> SMTP=smtp.orange.fr:465 size≈1.82MB
+[2025-09-23 11:22:24] Résumé: 5 succès, 0 échecs.

@@ -3,7 +3,7 @@
 
 #define MyAppName "Rapport APA"
 #define MyAppVersion "0.5"
-#define MyAppPublisher "TMJ Solutions"
+#define MyAppPublisher "OrigAI"
 #define MyAppExeName "Rapporteur APA.exe"
 #define MyAppAssocName "Rapporteur APA"
 #define MyAppAssocExt ".myp"
@@ -52,6 +52,7 @@ Name: "{app}\Protégés"
 [Files]
 Source: "C:\Users\tdrelangue\OneDrive\programmes\TMJ solutions\Proxima\APA\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "C:\Users\tdrelangue\OneDrive\programmes\TMJ solutions\Proxima\APA\dist\assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "C:\Users\tdrelangue\OneDrive\programmes\TMJ solutions\Proxima\APA\dist\templates\*"; DestDir: "{app}\templates"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "C:\Users\tdrelangue\OneDrive\programmes\TMJ solutions\Proxima\APA\dist\.env"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
