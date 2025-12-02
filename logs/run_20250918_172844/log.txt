@@ -1,5 +1,0 @@
-[2025-09-18 17:28:44] Cheyrou Henriette: tentative as-is, taille SMTP≈2.14MB (seuil info 19.0MB)
-[2025-09-18 17:28:44] Colin  Leloup  Annie: tentative as-is, taille SMTP≈1.87MB (seuil info 19.0MB)
-[2025-09-18 17:28:44] Laporte Jeannette: tentative as-is, taille SMTP≈0.55MB (seuil info 19.0MB)
-[2025-09-18 17:28:44] TEST test: tentative as-is, taille SMTP≈1.05MB (seuil info 19.0MB)
-[2025-09-18 17:28:44] TEST2 test2: tentative as-is, taille SMTP≈1.82MB (seuil info 19.0MB)
