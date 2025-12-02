@@ -1,6 +1,5 @@
 .qodo
-dist\
-logs\
-build\
-Protégés\
-*.pdf
+dist
+logs
+build
+Protégés
