@@ -7,17 +7,9 @@ import shutil
 from typing import List, Optional
 from datetime import datetime, date
 
+from config import Config
 from dotenv import load_dotenv
 from send_email import send_email  # version modernisée qu'on vient de corriger
-
-
-# ---------- Configuration ----------
-B64_OVERHEAD   = 1.37
-DEFAULT_MAX_MB = float(os.getenv("SMTP_MAX_MB", "19"))   # info log
-CONCURRENCY    = int(os.getenv("SMTP_CONCURRENCY", "1")) # séquentiel par défaut
-PROTEGES_DIR   = os.getenv("PROTEGES_DIR", "Protégés")
-LOG_DIR        = os.getenv("LOG_DIR", "logs")
-TEST_MODE      = int(os.getenv("TEST_MODE", "0"))        # 0 = réel, 1 = test (ne pas déplacer les fichiers)
 
 
 # ---------- Utilitaires ----------
@@ -30,44 +22,44 @@ def log_message(log_dir: str, txt: str) -> None:
     print(txt)
 
 
-def init_log_session() -> str:
-    run_dir = os.path.join(LOG_DIR, datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+def init_log_session(base_log_dir: str) -> str:
+    run_dir = os.path.join(base_log_dir, datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
     os.makedirs(run_dir, exist_ok=True)
     return run_dir
 
 
-def _env(key: str, default: str = "") -> str:
-    v = os.getenv(key)
-    return default if v is None else v.replace("\\n", "\n")
+# def _env(key: str, default: str = "") -> str:
+#     v = os.getenv(key)
+#     return default if v is None else v.replace("\\n", "\n")
 
 
-def get_env() -> None:
-    """
-    Valide les variables d'environnement nécessaires.
-    Ne retourne rien, mais lève une erreur si une variable clé manque.
-    """
-    load_dotenv(override=True)
-    sender = _env("email")
-    pwd    = _env("email_pwd")
-    to     = _env("emailrec")
+# def get_env() -> None:
+#     """
+#     Valide les variables d'environnement nécessaires.
+#     Ne retourne rien, mais lève une erreur si une variable clé manque.
+#     """
+#     load_dotenv(override=True)
+#     sender = _env("email")
+#     pwd    = _env("email_pwd")
+#     to     = _env("emailrec")
 
-    # Les templates APA sont utilisés par compose_email via send_email,
-    # donc on se contente de vérifier qu'ils existent ou qu'ils ont un défaut.
-    _ = _env("MAIL_SUBJECT", "Rapport trimestriel APA – {tri}{suffix} TR {year} – {name}")
-    _ = _env(
-        "MAIL_BODY",
-        "Bonjour,\n\nVeuillez trouver ci-joint le rapport trimestriel APA pour "
-        "{name} ({tri}{suffix} TR {year}).\n\nCordialement."
-    )
+#     # Les templates APA sont utilisés par compose_email via send_email,
+#     # donc on se contente de vérifier qu'ils existent ou qu'ils ont un défaut.
+#     _ = _env("MAIL_SUBJECT", "Rapport trimestriel APA – {tri}{suffix} TR {year} – {name}")
+#     _ = _env(
+#         "MAIL_BODY",
+#         "Bonjour,\n\nVeuillez trouver ci-joint le rapport trimestriel APA pour "
+#         "{name} ({tri}{suffix} TR {year}).\n\nCordialement."
+#     )
 
-    if not (sender and pwd and to):
-        raise RuntimeError("Variables manquantes: email, email_pwd, emailrec")
+#     if not (sender and pwd and to):
+#         raise RuntimeError("Variables manquantes: email, email_pwd, emailrec")
 
 
-def get_signature_txt() -> str:
-    name = _env("NameSender")
-    role = _env("Role")
-    return (f"{name}\n{role}".strip() if role else name).strip()
+# def get_signature_txt(config: Config) -> str:
+#     name = config.identity.name_sender
+#     role = config.identity.role,
+#     return (f"{name}\n{role}".strip() if role else name).strip()
 
 
 def current_trimester(today: Optional[date] = None) -> tuple[int, int, str]:
@@ -132,6 +124,7 @@ async def _send_one(
     suffix: str,
     files: List[str],
     log_dir: str,
+    config: Config,
     move_after_ok: bool = True,
 ) -> bool:
     async with sem:
@@ -142,21 +135,21 @@ async def _send_one(
             "year": yr,
             "suffix": suffix,
             "date": datetime.now().strftime("%d/%m/%Y"),
-            "sender_name": _env("NameSender", ""),
-            "sender_role": _env("Role", ""),
+            "sender_name": config.identity.name_sender,
+            "sender_role": config.identity.role,
             "attachments": files,
         }
 
-        info_mb = attachments_size_mb(files) * B64_OVERHEAD
+        info_mb = attachments_size_mb(files) * config.smtp.b64_overhead
         log_message(
             log_dir,
             f"{protege_name}: tentative via send_email (APA), "
-            f"taille SMTP≈{info_mb:.2f}MB (seuil info {DEFAULT_MAX_MB}MB)"
+            f"taille SMTP≈{info_mb:.2f}MB (seuil info {config.smtp.max_mb}MB)"
         )
 
         try:
             # send_email est synchrone → on le pousse dans un thread
-            success = await asyncio.to_thread(send_email, ctx, False)
+            success = await asyncio.to_thread(send_email, config, ctx, False)
 
             if success:
                 log_message(log_dir, f"OK {protege_name} via send_email (APA)")
@@ -173,22 +166,26 @@ async def _send_one(
 
 
 # ---------- Orchestrateur ----------
-async def effectuer_rapport_APA_async_limited(status_callback=print) -> None:
-    # Valide les variables d'environnement et recharge le .env
-    get_env()
+async def effectuer_rapport_APA_async_limited(config: Config | None = None, status_callback=print) -> None:
+    if config is None:
+        config = Config.load(".env")
 
-    run_dir = init_log_session()
+        # On force test mode (mais uniquement pour cette exécution !)
+        config.paths.test_mode = True 
+
+    run_dir = init_log_session(config.paths.log_dir)
     tri, yr, suffix = current_trimester()
 
     # TEST_MODE : 0 = prod (on déplace les fichiers), 1 = test (on laisse les fichiers en place)
-    move_after_ok = (TEST_MODE == 0)
+    move_after_ok = (config.paths.test_mode == 0)
 
     status_callback("Préparation des envois…")
-    proteges = _list_proteges(PROTEGES_DIR)
+    proteges = _list_proteges(config.paths.proteges_dir)
     if not proteges:
         status_callback("Aucun dossier dans 'Protégés'.")
         return
 
+    CONCURRENCY = max(1, config.smtp.concurrency)
     sem = asyncio.Semaphore(CONCURRENCY)
     tasks = []
     for p in sorted(proteges):
@@ -208,6 +205,7 @@ async def effectuer_rapport_APA_async_limited(status_callback=print) -> None:
                 files=files,
                 log_dir=run_dir,
                 move_after_ok=move_after_ok,
+                config=config,
             )
         )
 

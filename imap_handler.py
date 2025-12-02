@@ -1,24 +1,25 @@
 import imaplib
+import imap_tools
 from imap_tools.mailbox import MailBox
 import os
 import time
 from difflib import SequenceMatcher
 from Email import *
 
-from dotenv import load_dotenv
+from config import Config 
 
 # -----------------------------------------------------------
 # UTILITAIRES
 # -----------------------------------------------------------
 
-def imap_login(server: str, username: str, password: str):
+def imap_login(server: str, username: str, password: str) -> imaplib.IMAP4_SSL:
     """Connexion IMAP standard (IMAP4_SSL)."""
     imap = imaplib.IMAP4_SSL(server)
     imap.login(username, password)
     return imap
 
 
-def imap_list_folders(server: str, username: str, password: str):
+def imap_list_folders(server: str, username: str, password: str) -> list[str]:
     """Retourne une liste propre des dossiers IMAP."""
     imap = imap_login(server, username, password)
 
@@ -27,7 +28,7 @@ def imap_list_folders(server: str, username: str, password: str):
     if typ == "OK":
         for d in data:
             try:
-                parts = d.decode().split(' "/" ')
+                parts = d.decode().split(' "/" ') #type:ignore
                 if len(parts) == 2:
                     folders.append(parts[1].strip('"'))
             except:
@@ -61,7 +62,7 @@ def find_best_folder(target_name: str, MAIL_PASSWORD: str, MAIL_USERNAME: str, I
     best_score = 0.0
     target = target_name.lower()
 
-    with Mailbox(IMAP_SERVER).login(MAIL_USERNAME, MAIL_PASSWORD) as mb:  # no need to specify "Inbox" here
+    with imap_tools.mailbox.MailBox(IMAP_SERVER).login(MAIL_USERNAME, MAIL_PASSWORD) as mb:  # no need to specify "Inbox" here
         for folder in mb.folder.list():
             folder_name = folder.name
             score = SequenceMatcher(None, target, folder_name.lower()).ratio()
@@ -72,7 +73,7 @@ def find_best_folder(target_name: str, MAIL_PASSWORD: str, MAIL_USERNAME: str, I
     best_folder = "" if best_folder is None else best_folder
     return best_folder, best_score
 
-def find_sent_folder(server: str, username: str, password: str):
+def find_sent_folder(server: str, username: str, password: str, folder_suggestion: str | None = None):
     """
     Trouve le dossier 'Envoyés' / 'Sent' / 'Outbox' le plus probable.
     Retourne : (folder, score, alias_used)
@@ -81,6 +82,8 @@ def find_sent_folder(server: str, username: str, password: str):
         "Sent", "Envoyés", "Envoyes", "Envoye", "Envoyer",
         "Outbox", "Sent Items", "Boîte d'envoi", "Envoyé"
     ]
+    if folder_suggestion is not None:
+        candidates.append(folder_suggestion)
 
     folders = imap_list_folders(server, username, password)
 
@@ -134,8 +137,15 @@ def add_email_to_box(server: str, username: str, password: str, mailbox: str, ra
 # ATTTENTE D’UN EMAIL PARTICULIER
 # -----------------------------------------------------------
 
-def wait_for_email(server: str, username: str, password: str, box: str,
-                    subject: str, timeout=20, interval=2):
+def wait_for_email(
+    server: str,
+    username: str,
+    password: str,
+    box: str,
+    subject: str,
+    timeout: int = 20,
+    interval: int = 2,
+) -> bool:
     """
     Attend qu'un email avec un sujet donné apparaisse dans un dossier IMAP.
     Retourne True si trouvé, False sinon.
@@ -148,18 +158,36 @@ def wait_for_email(server: str, username: str, password: str, box: str,
             imap.select(box, readonly=True)
 
             typ, data = imap.search(None, 'UNSEEN')
-            if typ == "OK":
+            if typ == "OK" and data and data[0]:
                 for msgid in data[0].split():
                     typ2, msg_data = imap.fetch(msgid, '(BODY.PEEK[HEADER.FIELDS (SUBJECT)])')
-                    if typ2 == "OK":
-                        header = msg_data[0][1].decode(errors="ignore")
-                        if subject.lower() in header.lower():
-                            imap.logout()
-                            return True
+                    # Vérifications robustes sur msg_data
+                    if typ2 != "OK" or not msg_data:
+                        continue
+
+                    first = msg_data[0]
+
+                    # Certains serveurs renvoient None, ou un élément non tuple
+                    if not isinstance(first, tuple) or len(first) < 2:
+                        continue
+
+                    raw_header = first[1]
+                    if raw_header is None:
+                        continue
+
+                    # Décodage sûr
+                    if isinstance(raw_header, (bytes, bytearray)):
+                        header = raw_header.decode(errors="ignore")
+                    else:
+                        header = str(raw_header)
+
+                    if subject.lower() in header.lower():
+                        imap.logout()
+                        return True
 
             imap.logout()
 
-        except:
+        except Exception:
             pass
 
         time.sleep(interval)
@@ -172,18 +200,14 @@ def wait_for_email(server: str, username: str, password: str, box: str,
 # -----------------------------------------------------------
 
 if __name__ == "__main__":
-    load_dotenv(override=True)
+    # On passe par la config centrale (et donc .env) UNIQUEMENT ici
+    cfg = Config.load(".env")
 
-    print("=== TEST AUTOMATIQUE IMAP HANDLER ===")
-
-    # Variables d'env
-    MAIL_USERNAME = os.getenv("email")
-    MAIL_PASSWORD = os.getenv("email_pwd")
-    MAILBOX_NAME = os.getenv("Mailbox_name", "INBOX/ASH")
-    SENTBOX_NAME = os.getenv("Sentbox_name", "INBOX/OUTBOX")
-
-    # Trouver automatiquement le serveur IMAP
-    IMAP_SERVER = "imap.orange.fr"
+    MAIL_USERNAME = cfg.identity.email
+    MAIL_PASSWORD = cfg.identity.email_pwd
+    MAILBOX_NAME = cfg.imap.mailbox_name or "INBOX/ASH"
+    SENTBOX_NAME = cfg.imap.sentbox_name or "INBOX/OUTBOX"
+    IMAP_SERVER = cfg.imap.host
 
     print(f"\nIMAP SERVER : {IMAP_SERVER}")
     print(f"USERNAME    : {MAIL_USERNAME}")
