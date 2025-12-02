@@ -158,8 +158,26 @@ class SettingsWindow(ctk.CTkToplevel):
         messagebox.showinfo("Enregistré", "Paramètres enregistrés avec succès !")
         self.destroy()
 
+
+# ---------- Configurateur ----------
+
+class Config:
+    def __init__(self, env_path=".env"):
+        load_dotenv(env_path)
+        self.email = os.getenv("email")
+        self.pwd = os.getenv("email_pwd")
+        self.request_dsn = os.getenv("SMTP_REQUEST_DSN") == "1"
+        self.mailbox_name = os.getenv("Mailbox_name", "ash")
+        self.smtp_host = os.getenv("SMTP_HOST")
+        self.smtp_ssl = os.getenv("SMTP_SSL") == "1"
+        ...
+
+
+
         
 if __name__ == "__main__":
+    config = Config(".env")
+
     ctk.set_appearance_mode("System")
     ctk.set_default_color_theme("blue")
     app = APAGUI()

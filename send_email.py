@@ -1,16 +1,30 @@
 # send_email.py
-import os, smtplib, imaplib, zipfile, tempfile, shutil
+
+import os
+import smtplib
+import zipfile
+import tempfile
+import shutil
 from email.message import EmailMessage
 from email.utils import make_msgid, formatdate
 from datetime import datetime
-import imaplib, os, time, re
 from dotenv import load_dotenv
-from Email import compose_email  # réutilisé
+
+from Email import compose_email  # ton composeur de message
+from imap_handler import add_email_to_box, find_sent_folder, find_best_folder  # nouveau handler IMAP
+
+# --------------------------------------------------------------------
+# CONFIG DE BASE (lue une fois, rechargée ensuite dans les fonctions)
+# --------------------------------------------------------------------
 
 B64_OVERHEAD = float(os.getenv("B64_OVERHEAD", "1.37"))
 MAX_MB = float(os.getenv("SMTP_MAX_MB", "19"))  # seuil avant zip
 IMAP_COPY_SENT = os.getenv("IMAP_COPY_SENT", "0") == "1"
-IMAP_SENT_FOLDER = os.getenv("IMAP_SENT_FOLDER", '"Sent"')
+
+
+# --------------------------------------------------------------------
+# OUTILS GÉNÉRAUX
+# --------------------------------------------------------------------
 
 def guess_imap_host(email: str | None) -> str | None:
     if email is None:
@@ -18,7 +32,7 @@ def guess_imap_host(email: str | None) -> str | None:
     domain = email.split("@")[-1].lower()
     if domain == "gmail.com":
         return "imap.gmail.com"
-    if any(k in domain for k in ("outlook","hotmail","live","office365")):
+    if any(k in domain for k in ("outlook", "hotmail", "live", "office365")):
         return "outlook.office365.com"
     if "yahoo" in domain:
         return "imap.mail.yahoo.com"
@@ -26,11 +40,14 @@ def guess_imap_host(email: str | None) -> str | None:
         return "imap.orange.fr"
     return f"imap.{domain}"
 
+
 def bytes_size(paths):
     return sum(os.path.getsize(p) for p in paths if os.path.isfile(p))
 
+
 def est_smtp_mb(paths):
-    return bytes_size(paths) * B64_OVERHEAD / (1024*1024)
+    return bytes_size(paths) * B64_OVERHEAD / (1024 * 1024)
+
 
 def zip_all(label, paths):
     tmpdir = tempfile.mkdtemp(prefix=f"mailzip_{label}_")
@@ -40,45 +57,72 @@ def zip_all(label, paths):
             zf.write(p, arcname=os.path.basename(p))
     return [zpath], tmpdir
 
+
 def attach_files(msg: EmailMessage, paths):
     for p in paths:
         with open(p, "rb") as f:
-            msg.add_attachment(f.read(), maintype="application", subtype="octet-stream",
-                               filename=os.path.basename(p))
+            msg.add_attachment(
+                f.read(),
+                maintype="application",
+                subtype="octet-stream",
+                filename=os.path.basename(p),
+            )
+
+
+# --------------------------------------------------------------------
+# SMTP
+# --------------------------------------------------------------------
 
 def smtp_connect():
-    load_dotenv()
+    # Important : on recharge l'env à chaque envoi pour prendre les
+    # modifs de .env en compte
+    load_dotenv(override=True)
+
     host = os.getenv("SMTP_HOST", "smtp.orange.fr")
     port = int(os.getenv("SMTP_PORT", "465"))
     use_ssl = os.getenv("SMTP_SSL", "1") == "1"
     user = os.getenv("email")
-    pwd  = os.getenv("email_pwd")
+    pwd = os.getenv("email_pwd")
+
     if use_ssl:
         s = smtplib.SMTP_SSL(host, port, timeout=60)
         s.ehlo()
     else:
         s = smtplib.SMTP(host, port, timeout=60)
         s.ehlo()
-        try: s.starttls(); s.ehlo()
-        except smtplib.SMTPException: pass
-    s.login(user, pwd) # pyright: ignore[reportArgumentType]
+        try:
+            s.starttls()
+            s.ehlo()
+        except smtplib.SMTPException:
+            pass
+
+    s.login(user, pwd)  # pyright: ignore[reportArgumentType]
     return s
 
+
 def smtp_send_verified(msg: EmailMessage):
-    """Envoi SMTP avec DSN si (et seulement si) annoncé. Retourne un dict état."""
-    
+    """
+    Envoi SMTP avec DSN si (et seulement si) annoncé par le serveur
+    et activé via SMTP_REQUEST_DSN.
+    Retourne un dict {accepted, used_dsn, message_id, copied_sent}.
+    """
+    load_dotenv(override=True)
 
     want_dsn = os.getenv("SMTP_REQUEST_DSN", "1") == "1"
-    res = {"accepted": False, "used_dsn": False, "message_id": msg["Message-ID"], "copied_sent": False}
+    res = {
+        "accepted": False,
+        "used_dsn": False,
+        "message_id": msg["Message-ID"],
+        "copied_sent": False,
+    }
 
-    s = smtp_connect()  # doit créer SMTP/SMTP_SSL et faire login
+    s = smtp_connect()
     try:
-        # S'assurer d'un EHLO après connexion ET après STARTTLS éventuel
         try:
             s.ehlo()
         except Exception:
             pass
-        # Certains smtp_connect() encapsulent STARTTLS; sinon:
+
         if hasattr(s, "starttls") and getattr(s, "_tls_established", False) is False:
             try:
                 s.starttls()
@@ -87,7 +131,6 @@ def smtp_send_verified(msg: EmailMessage):
                 pass
 
         feats = getattr(s, "esmtp_features", {}) or {}
-        # has_extn gère les cas-insensibles si dispo
         support_dsn = (hasattr(s, "has_extn") and s.has_extn("dsn")) or ("dsn" in feats)
 
         rcpt_opts = ["NOTIFY=SUCCESS,FAILURE,DELAY"] if (want_dsn and support_dsn) else None
@@ -109,65 +152,32 @@ def smtp_send_verified(msg: EmailMessage):
             else:
                 raise
     finally:
-        try: s.quit()
-        except Exception: s.close()
+        try:
+            s.quit()
+        except Exception:
+            s.close()
+
     return res
 
+# --------------------------------------------------------------------
+# FONCTION PRINCIPALE D’ENVOI
+# --------------------------------------------------------------------
 
-def _normalize_name(s: str) -> str:
-    # retire quotes et guillemets
-    return s.strip().strip('"').strip()
+def send_email(ctx=None, dev=False) -> bool:
+    """
+    ctx : dict contenant au minimum :
+      - name
+      - tri
+      - year
+      - date
+      - sender_name
+      - sender_role
+      - attachments : liste de chemins
 
-def _list_mailboxes(imap: imaplib.IMAP4_SSL) -> list[str]:
-    typ, data = imap.list()
-    if typ != "OK" or not data: return []
-    boxes = []
-    for raw in data:
-        line = raw.decode(errors="ignore") # type: ignore
-        # format typique: (* FLAGS) "DELIM" "NAME"
-        m = re.search(r'".*"\s+"(.+)"$', line)
-        boxes.append(_normalize_name(m.group(1) if m else line.split()[-1]))
-    return boxes
+    Retourne True si SMTP a accepté le message.
+    """
+    load_dotenv(override=True)
 
-def _guess_sent_folder(candidates: list[str]) -> str | None:
-    # ordre de préférence
-    prefs = ["Sent", "Envoyés", "Envoyes", "INBOX.Sent", "INBOX/Sent", "Boîte d’envoi", "Envoyati", "[Gmail]/Sent Mail"]
-    low = {c.lower(): c for c in candidates}
-    print(candidates)
-    for p in prefs:
-        if p.lower() in low: return low[p.lower()]
-    # heuristique: mot-clé
-    for c in candidates:
-        if "sent" in c.lower() or "envoy" in c.lower():
-            return c
-    return None
-
-def imap_append_sent(raw_msg: bytes) -> tuple[bool, str | None]:
-    user = os.getenv("email"); pwd = os.getenv("email_pwd")
-    host = guess_imap_host(user or "")
-    if not (host and user and pwd):
-        return False, "IMAP config incomplète"
-
-    try:
-        imap = imaplib.IMAP4_SSL(host)
-        imap.login(user, pwd)
-
-        boxes = _list_mailboxes(imap)
-        print(boxes)
-        folder = _guess_sent_folder(boxes) or os.getenv("IMAP_SENT_FOLDER", "Sent")
-
-        # crée 'Sent' si inexistant
-        if folder not in boxes and folder == "Sent":
-            imap.create("Sent")
-
-        date_str = imaplib.Time2Internaldate(time.time())
-        typ, _ = imap.append(folder, '', date_str, raw_msg)
-        imap.logout()
-        return (typ == "OK"), (None if typ == "OK" else f"APPEND={typ} dossier={folder}")
-    except Exception as e:
-        return False, str(e)
-
-def send_email(ctx=None, dev=False):
     if ctx is None:
         attachments = [
             "Protégés/TEST test/COS Drelangue.pdf"
@@ -179,33 +189,65 @@ def send_email(ctx=None, dev=False):
             "date": datetime.now().strftime("%d/%m/%Y"),
             "sender_name": os.getenv("NameSender", ""),
             "sender_role": os.getenv("Role", ""),
-            "attachments": attachments
+            "attachments": attachments,
         }
-    # 2) Compose le message (subject + corps depuis templates/.env)
+
+    # 1) Compose le message (subject + corps depuis templates/.env)
     msg = compose_email(ctx)  # From/To/Subject/Body déjà posés
     mid = msg["Message-ID"]
 
-    # 3) Pièces jointes + zip si trop gros
-    
+    sender_env = os.getenv("email", "expediteur@example.com")
+    # Demande d'accusé de lecture (MDN)
+    msg["Disposition-Notification-To"] = sender_env
+    # Variante ancienne encore utilisée
+    msg["Return-Receipt-To"] = sender_env
+
+    # 2) Pièces jointes + zip si trop gros
+    attachments = ctx["attachments"]
     tmpdir = None
+
     size_mb = est_smtp_mb(attachments)
     if size_mb > MAX_MB:
         attachments, tmpdir = zip_all(ctx["name"], attachments)
+        ctx["attachments"] = attachments
+
     attach_files(msg, attachments)
 
-    # 4) Envoi SMTP vérifié
+    # 3) Envoi SMTP vérifié
     result = smtp_send_verified(msg)
 
-    # 5) Copie IMAP “Envoyés” optionnelle
+    # 4) Copie IMAP “Envoyés” via imap_handler (optionnelle)
     if IMAP_COPY_SENT and result["accepted"]:
-        ok, err = imap_append_sent(msg.as_bytes())
-        result["copied_sent"] = ok
-        if not ok and err: print(f"[IMAP] Append échec: {err}")
+        user = os.getenv("email")
+        pwd = os.getenv("email_pwd")
+        server = guess_imap_host(user)
 
-    # 6) Nettoyage zip si créé
-    if tmpdir: shutil.rmtree(tmpdir, ignore_errors=True)
+        if server and user and pwd:
+            sent_folder = find_sent_folder(server, user, pwd)
+            APA_folder = os.getenv("email")
+            if sent_folder:
+                err = add_email_to_box(server, user, pwd, sent_folder, msg.as_bytes())
+                result["copied_sent"] = (err is None)
+                if not dev and err:
+                    print(f"[IMAP] Append échec: {err}")
+            else:
+                if not dev:
+                    print("[IMAP] Impossible de déterminer le dossier 'Envoyés'.")
+            if APA_folder:
+                APA_folder, _ = find_best_folder(APA_folder, server, user, pwd)
+                err = add_email_to_box(server, user, pwd, APA_folder, msg.as_bytes())
+                result["copied_sent"] = (err is None)
+                if not dev and err:
+                    print(f"[IMAP] Append échec: {err}")
+            else:
+                if not dev:
+                    print(f"[IMAP] Impossible de déterminer le dossier '{APA_folder}'.")
 
-    # 7) Rapport console
+    # 5) Nettoyage zip si créé
+    if tmpdir:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    # 6) Rapport console
     if not dev:
         print("=== ENVOI ===")
         print(f"Message-ID: {mid}")
@@ -213,7 +255,17 @@ def send_email(ctx=None, dev=False):
         print(f"DSN utilisé: {result['used_dsn']}")
         print(f"Copié 'Envoyés' IMAP: {result['copied_sent']}")
         print(f"Taille estimée SMTP avant envoi: {size_mb:.2f} MB (seuil {MAX_MB} MB)")
-        if size_mb > MAX_MB: print("→ Fichiers zippés avant envoi.")
+        if size_mb > MAX_MB:
+            print("→ Fichiers zippés avant envoi.")
+
+    return bool(result.get("accepted"))
+
+
+# --------------------------------------------------------------------
+# TEST LOCAL
+# --------------------------------------------------------------------
 
 if __name__ == "__main__":
-    send_email()
+    # Test simple : envoi d'un mail avec ctx par défaut
+    ok = send_email()
+    print("Résultat send_email() :", ok)

@@ -1,0 +1,7 @@
+[2025-12-01 21:27:35] No attachment found for Cheyrou Henriette, skipped.
+[2025-12-01 21:27:35] No attachment found for Colin  Leloup  Annie, skipped.
+[2025-12-01 21:27:35] No attachment found for Laporte Jeannette, skipped.
+[2025-12-01 21:27:35] No attachment found for TEST2 test2, skipped.
+[2025-12-01 21:27:35] TEST test: tentative via send_email (APA), taille SMTP≈1.05MB (seuil info 19.0MB)
+[2025-12-01 21:27:38] OK TEST test via send_email (APA)
+[2025-12-01 21:27:38] Résumé: 1 succès, 0 échecs.
