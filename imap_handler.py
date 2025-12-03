@@ -201,7 +201,7 @@ def wait_for_email(
 
 if __name__ == "__main__":
     # On passe par la config centrale (et donc .env) UNIQUEMENT ici
-    cfg = Config.load(".env")
+    cfg = Config.load(".env",mode="APA")
 
     MAIL_USERNAME = cfg.identity.email
     MAIL_PASSWORD = cfg.identity.email_pwd

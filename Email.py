@@ -18,16 +18,16 @@ def load_template(TEMPLATE_DIR:str, name: str) -> str:
 def compose_email(config: Config, context: dict) -> EmailMessage:
     """Construit un EmailMessage à partir des templates et du contexte"""
 
-    TEMPLATE_DIR = config.paths.TEMPLATE_DIR
+    TEMPLATE_DIR = config.template.TEMPLATE_DIR
     sender = config.identity.email
     recipient = config.identity.emailrec
     # ---- Sujet ----
-    subject_tpl = load_template(TEMPLATE_DIR, config.paths.APA_subject_template_name)
+    subject_tpl = load_template(TEMPLATE_DIR, config.template.subject_template_name)
     subject_tpl = subject_tpl.replace("\r", " ").replace("\n", " ").strip()
     subject = subject_tpl.format_map(context)
 
     # ---- Corps HTML ----
-    body_html_tpl = load_template(TEMPLATE_DIR, config.paths.APA_body_html_template_name)
+    body_html_tpl = load_template(TEMPLATE_DIR, config.template.body_html_template_name)
     body_html = Template(body_html_tpl).substitute(context)
 
         # ---- Corps TXT (obligatoire) ----

@@ -249,5 +249,5 @@ def send_email(config: Config, ctx=None, dev=False ) -> bool:
 
 if __name__ == "__main__":
     # Test simple : envoi d'un mail avec ctx par défaut
-    ok = send_email(config=Config.load())
+    ok = send_email(config=Config.load(mode="APA"))
     print("Résultat send_email() :", ok)

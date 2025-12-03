@@ -166,7 +166,7 @@ async def _send_one(
 
 
 # ---------- Orchestrateur ----------
-async def effectuer_rapport_APA_async_limited(config: Config | None = None, status_callback=print) -> None:
+async def effectuer_rapport_async_limited(config: Config | None = None, status_callback=print) -> None:
     if config is None:
         config = Config.load(".env")
 
@@ -217,5 +217,6 @@ async def effectuer_rapport_APA_async_limited(config: Config | None = None, stat
 
 
 if __name__ == "__main__":
-    asyncio.run(effectuer_rapport_APA_async_limited())
+    config = Config.load(".env",mode="APA")
+    asyncio.run(effectuer_rapport_async_limited(config=config))
 

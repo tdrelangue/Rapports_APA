@@ -8,7 +8,7 @@ import platform
 from dotenv import load_dotenv, set_key
 from PIL import Image
 import asyncio
-from Rapports_trimestriel_APA import effectuer_rapport_APA_async_limited
+from Rapports_trimestriel_APA import effectuer_rapport_async_limited
 from config import Config
 from email_utils import html_to_text
 
@@ -73,8 +73,8 @@ class APAGUI(ctk.CTk):
 
         self.status_label.configure(text="Envoi des rapports en cours...")
         try:
-            config = Config.load(self.ENV_FILE)
-            asyncio.run(effectuer_rapport_APA_async_limited(config=config,status_callback=update_status))
+            config = Config.load(self.ENV_FILE, mode="APA")
+            asyncio.run(effectuer_rapport_async_limited(config=config,status_callback=update_status))
             self.status_label.configure(text="Rapports envoyés avec succès !")
             messagebox.showinfo("Succès", "Les rapports ont été envoyés avec succès !")
         except Exception as e:
@@ -199,10 +199,10 @@ class TemplateEditorWindow(ctk.CTkToplevel):
         self.grid_rowconfigure(3, weight=1)
 
         base_dir = os.path.dirname(ENV_FILE) or "."
-        tpl_dir = os.path.join(base_dir, cfg.paths.TEMPLATE_DIR)
+        tpl_dir = os.path.join(base_dir, cfg.template.TEMPLATE_DIR)
 
-        self.subject_path = os.path.join(tpl_dir, cfg.paths.APA_subject_template_name)
-        self.body_html_path = os.path.join(tpl_dir, cfg.paths.APA_body_html_template_name)
+        self.subject_path = os.path.join(tpl_dir, cfg.template.subject_template_name)
+        self.body_html_path = os.path.join(tpl_dir, cfg.template.body_html_template_name)
 
         # Chargement des fichiers (ou valeurs par défaut)
         subject_txt = ""
@@ -286,7 +286,7 @@ class TemplateEditorWindow(ctk.CTkToplevel):
 
 
 if __name__ == "__main__":
-    config = Config.load(".env")
+    config = Config.load(".env", mode="APA")
 
     ctk.set_appearance_mode("System")
     ctk.set_default_color_theme("blue")
