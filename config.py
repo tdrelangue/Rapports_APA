@@ -3,7 +3,6 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 from dotenv import load_dotenv
-from regex import template
 
 
 def guess_imap_host(email: str) -> str:
@@ -70,7 +69,7 @@ class Config:
     template: TemplateConfig
 
     @classmethod
-    def load(cls, env_path: str = ".env", mode: Optional[str] = None) -> "Config":
+    def load(cls, env_path: str = ".env", mode: Optional[str] = "APA") -> "Config":
         load_dotenv(env_path, override=True)
 
         email = os.getenv("email", "")

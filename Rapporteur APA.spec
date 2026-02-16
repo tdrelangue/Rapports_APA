@@ -5,7 +5,7 @@ a = Analysis(
     ['APA_Email.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('assets', 'assets')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

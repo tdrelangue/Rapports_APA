@@ -21,6 +21,7 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 ENV_FILE = resource_path(".env")
+MODE="APA"
 
 load_dotenv()
 
@@ -179,7 +180,7 @@ class SettingsWindow(ctk.CTkToplevel):
     def open_template_editor(self):
 
         try:
-            cfg = Config.load(ENV_FILE)
+            cfg = Config.load(ENV_FILE, MODE)
         except Exception as e:
             messagebox.showerror("Erreur", f"Impossible de charger la configuration :\n{e}")
             return
@@ -202,6 +203,7 @@ class TemplateEditorWindow(ctk.CTkToplevel):
         tpl_dir = os.path.join(base_dir, cfg.template.TEMPLATE_DIR)
 
         self.subject_path = os.path.join(tpl_dir, cfg.template.subject_template_name)
+
         self.body_html_path = os.path.join(tpl_dir, cfg.template.body_html_template_name)
 
         # Chargement des fichiers (ou valeurs par défaut)

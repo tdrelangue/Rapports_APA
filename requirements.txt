@@ -1,3 +1,7 @@
 customtkinter
 python-dotenv
 Pillow
+asyncio
+imap_tools
+icecream
+PyInstaller
